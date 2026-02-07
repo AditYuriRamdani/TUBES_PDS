@@ -5,6 +5,7 @@ from streamlit_folium import st_folium
 from folium.plugins import MarkerCluster, HeatMap, Fullscreen
 import altair as alt
 from math import radians, cos, sin, asin, sqrt
+import time
 
 # --- KONFIGURASI HALAMAN ---
 st.set_page_config(
@@ -13,28 +14,50 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- CSS CUSTOM ---
+# --- CSS CUSTOM (DIPERBAIKI AGAR TEKS TIDAK KEPOTONG) ---
 st.markdown("""
     <style>
-    .metric-card {
-        background-color: #f0f2f6; border-radius: 10px; padding: 15px; text-align: center;
+    /* Metric Cards */
+    [data-testid="stMetric"] {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        padding: 15px;
+        border-radius: 10px;
         box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        color: #000000;
     }
-    div[data-testid="stMetricValue"] { font-size: 24px; color: #000; }
+    [data-testid="stMetricLabel"] {
+        font-size: 14px;
+        color: #495057 !important; 
+    }
+    
+    /* PERBAIKAN DI SINI: Font Value Diperkecil jadi 20px */
+    [data-testid="stMetricValue"] {
+        font-size: 20px; /* <-- Ukuran pas agar "Negeri | Swasta" tidak kepotong */
+        font-weight: bold;
+        color: #212529 !important;
+    }
+    
+    [data-testid="stMetricDelta"] {
+        color: #495057 !important;
+    }
+    
+    /* Loading Status Container Styling */
+    .stStatusWidget {
+        border-radius: 10px;
+        border: 1px solid #e0e0e0;
+    }
     </style>
 """, unsafe_allow_html=True)
 
-# --- FUNGSI JARAK (HAVERSINE FORMULA) ---
+# --- FUNGSI JARAK (HAVERSINE) ---
 def haversine(lon1, lat1, lon2, lat2):
-    """
-    Menghitung jarak antara dua titik koordinat (dalam KM)
-    """
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1 
     dlat = lat2 - lat1 
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
     c = 2 * asin(sqrt(a)) 
-    r = 6371 # Radius bumi dalam KM
+    r = 6371 
     return c * r
 
 # --- FUNGSI LOAD DATA ---
@@ -43,11 +66,9 @@ def load_data():
     try:
         df = pd.read_csv("data_sekolah_jabar_final.csv")
         
-        # 1. HAPUS KOLOM 'NAMA DUSUN' (Sesuai Request)
         if 'NAMA DUSUN' in df.columns:
             df = df.drop(columns=['NAMA DUSUN'])
             
-        # 2. RENAME QUALITY_SCORE JADI BAHASA INDONESIA
         if 'QUALITY_SCORE' in df.columns:
             df = df.rename(columns={'QUALITY_SCORE': 'SKOR_KUALITAS'})
             
@@ -65,26 +86,38 @@ def get_color(akreditasi):
 # --- MAIN APPLICATION ---
 def main():
     st.title("🗺️ Dashboard Zonasi PPDB Jawa Barat")
-    st.markdown("**Simulasi Jarak & Kualitas Sekolah** | Data Source: Dapodik/Verval SP (Scraped)")
+    st.markdown("**Simulasi Jarak & Kualitas Sekolah** | Data Source: Dapodik/Verval SP")
     
-    df = load_data()
+    # --- UI LOADING ---
+    with st.status("🚀 Sedang memuat sistem zonasi...", expanded=True) as status:
+        st.write("📂 Menghubungkan ke database sekolah...")
+        time.sleep(0.8) 
+        
+        st.write("🧹 Membersihkan data duplikat & normalisasi...")
+        df = load_data() 
+        
+        if df is not None:
+            st.write(f"✅ Berhasil memuat {len(df):,} data sekolah aktif.")
+        
+        time.sleep(0.5) 
+        st.write("🗺️ Menyiapkan peta interaktif...")
+        status.update(label="Sistem Siap Digunakan!", state="complete", expanded=False)
     
     if df is None:
         st.error("⚠️ File 'data_sekolah_jabar_final.csv' belum ditemukan.")
         st.stop()
 
-    # --- SESSION STATE UNTUK LOKASI RUMAH ---
+    # --- SESSION STATE ---
     if 'lokasi_rumah' not in st.session_state:
         st.session_state['lokasi_rumah'] = None
 
     # --- SIDEBAR ---
     st.sidebar.header("🎛️ Panel Kontrol")
     
-    # Mode Zonasi
     st.sidebar.subheader("🏠 Mode Zonasi")
     aktifkan_zonasi = st.sidebar.checkbox("Aktifkan Pilih Lokasi Rumah", value=False)
     
-    radius_km = 0 # Default
+    radius_km = 0 
     if aktifkan_zonasi:
         st.sidebar.info("👉 Klik di Peta untuk menentukan lokasi rumah Anda.")
         radius_km = st.sidebar.slider("Radius Zonasi (KM):", 1, 15, 3)
@@ -94,12 +127,26 @@ def main():
 
     st.sidebar.divider()
     
-    # Filter Standar
     st.sidebar.subheader("Filter Data")
     filter_jenjang = st.sidebar.multiselect("Jenjang:", df['JENJANG'].unique(), default=df['JENJANG'].unique())
     opsi_akreditasi = sorted(df['AKREDITASI_CLEAN'].unique())
     filter_akreditasi = st.sidebar.multiselect("Akreditasi:", opsi_akreditasi, default=opsi_akreditasi)
     filter_kota = st.sidebar.multiselect("Kab/Kota:", sorted(df['KABUPATEN'].unique().astype(str)), default=[])
+
+    # --- INFO TAMBAHAN DI SIDEBAR ---
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("ℹ️ Tentang Aplikasi"):
+        st.markdown("""
+        **Panduan Pengguna:**
+        1. **Filter:** Gunakan menu di atas untuk memilah jenjang/akreditasi.
+        2. **Zonasi:** Centang **'Aktifkan Pilih Lokasi Rumah'**, atur radius, lalu klik lokasi rumah di peta.
+        3. **Reset:** Tekan tombol Reset jika ingin menghapus titik rumah.
+        
+        **Catatan Teknis:**
+        - **Skor Kualitas:** Dihitung dari bobot Akreditasi (A=100, B=75, C=50).
+        - **Jarak:** Menggunakan rumus *Haversine* (garis lurus/euclidean).
+        """)
+        st.caption("Developed by Kelompok 5 PDS IF 6")
 
     # --- LOGIKA FILTERING ---
     df_filtered = df[df['JENJANG'].isin(filter_jenjang)]
@@ -107,23 +154,17 @@ def main():
     if filter_kota:
         df_filtered = df_filtered[df_filtered['KABUPATEN'].isin(filter_kota)]
 
-    # --- LOGIKA JARAK (JIKA ZONASI AKTIF) ---
+    # --- LOGIKA JARAK ---
     jarak_msg = ""
     if aktifkan_zonasi and st.session_state['lokasi_rumah']:
         user_lat = st.session_state['lokasi_rumah'][0]
         user_lon = st.session_state['lokasi_rumah'][1]
         
-        # Hitung jarak tiap sekolah ke titik rumah
-        # Kita pakai apply lambda (agak berat jika data jutaan, tapi oke untuk ribuan)
         df_filtered['JARAK_KM'] = df_filtered.apply(
             lambda row: haversine(user_lon, user_lat, row['BUJUR'], row['LINTANG']), axis=1
         )
         
-        # Filter berdasarkan radius
-        df_sebelum = len(df_filtered)
         df_filtered = df_filtered[df_filtered['JARAK_KM'] <= radius_km].copy()
-        
-        # Urutkan dari yang terdekat
         df_filtered = df_filtered.sort_values('JARAK_KM')
         
         jarak_msg = f"📍 Menampilkan **{len(df_filtered)}** sekolah dalam radius **{radius_km} KM** dari titik rumah."
@@ -131,17 +172,20 @@ def main():
     # --- KPI METRICS ---
     st.markdown("### 📊 Ringkasan Statistik")
     if jarak_msg:
-        st.success(jarak_msg)
+        st.toast(jarak_msg, icon='📍') 
+        st.success(jarak_msg) 
         
-    col1, col2, col3, col4 = st.columns(4)
+    # PERBAIKAN DI SINI: Kolom ke-4 dibuat lebih lebar (1.5x) agar muat
+    col1, col2, col3, col4 = st.columns([1, 1, 1, 1.5])
+    
     total = len(df_filtered)
     jml_a = len(df_filtered[df_filtered['AKREDITASI_CLEAN'] == 'A'])
     persen_a = (jml_a / total * 100) if total > 0 else 0
-    avg_q = df_filtered['SKOR_KUALITAS'].mean() if total > 0 else 0 # Sudah pakai nama kolom baru
+    avg_q = df_filtered['SKOR_KUALITAS'].mean() if total > 0 else 0 
     
     col1.metric("Total Sekolah", f"{total:,}")
     col2.metric("Akreditasi A", f"{jml_a} ({persen_a:.1f}%)")
-    col3.metric("Rata-rata Skor Kualitas", f"{avg_q:.1f}/100")
+    col3.metric("Rata-rata Skor", f"{avg_q:.1f}")
     
     if 'STATUS' in df_filtered.columns:
         negeri = len(df_filtered[df_filtered['STATUS'] == 'NEGERI'])
@@ -156,10 +200,9 @@ def main():
     with col_map:
         st.subheader("📍 Peta Interaktif")
         
-        # Tentukan Center Map
         if aktifkan_zonasi and st.session_state['lokasi_rumah']:
              center_lat, center_lon = st.session_state['lokasi_rumah']
-             zoom = 13 # Zoom lebih dekat ke rumah
+             zoom = 13 
         elif not df_filtered.empty:
             center_lat, center_lon = df_filtered['LINTANG'].mean(), df_filtered['BUJUR'].mean()
             zoom = 10 if filter_kota else 9
@@ -170,7 +213,6 @@ def main():
         m = folium.Map(location=[center_lat, center_lon], zoom_start=zoom, tiles="CartoDB positron")
         Fullscreen().add_to(m)
 
-        # 1. GAMBAR MARKER RUMAH (JIKA ADA)
         if aktifkan_zonasi and st.session_state['lokasi_rumah']:
             folium.Marker(
                 location=st.session_state['lokasi_rumah'],
@@ -178,17 +220,14 @@ def main():
                 icon=folium.Icon(color="black", icon="home", prefix="fa")
             ).add_to(m)
             
-            # Gambar Lingkaran Radius Zonasi
             folium.Circle(
                 location=st.session_state['lokasi_rumah'],
-                radius=radius_km * 1000, # convert KM to Meter
+                radius=radius_km * 1000, 
                 color="blue", fill=True, fill_opacity=0.1
             ).add_to(m)
 
-        # 2. GAMBAR MARKER SEKOLAH
         marker_cluster = MarkerCluster().add_to(m)
         for _, row in df_filtered.iterrows():
-            # Info Jarak di Popup (jika mode zonasi aktif)
             info_jarak = f"<br><b>Jarak:</b> {row['JARAK_KM']:.2f} KM" if 'JARAK_KM' in row else ""
             
             html = f"""
@@ -207,45 +246,39 @@ def main():
                 icon=folium.Icon(color=get_color(row['AKREDITASI_CLEAN']), icon="graduation-cap", prefix="fa")
             ).add_to(marker_cluster)
 
-        # RENDER PETA DAN TANGKAP KLIK USER
         map_output = st_folium(m, height=550, use_container_width=True)
 
-        # LOGIKA MENANGKAP KLIK USER (Hanya jika mode zonasi aktif)
         if aktifkan_zonasi:
             if map_output['last_clicked']:
                 clicked_lat = map_output['last_clicked']['lat']
                 clicked_lng = map_output['last_clicked']['lng']
                 
-                # Cek apakah lokasi berubah agar tidak rerun terus menerus
                 if st.session_state['lokasi_rumah'] != [clicked_lat, clicked_lng]:
                     st.session_state['lokasi_rumah'] = [clicked_lat, clicked_lng]
-                    st.rerun() # Refresh halaman untuk hitung jarak baru
+                    st.rerun() 
 
     with col_chart:
         st.subheader("📈 Analisis Data")
         if not df_filtered.empty:
-            # Chart Donut (TITLE BAHASA INDONESIA)
             chart_akreditasi = alt.Chart(df_filtered).mark_arc(innerRadius=50).encode(
                 theta=alt.Theta("count()", stack=True),
                 color=alt.Color('AKREDITASI_CLEAN', legend=alt.Legend(title="Akreditasi"),
                                 scale=alt.Scale(domain=['A', 'B', 'C', 'TT'], range=['green', 'blue', 'orange', 'red'])),
-                # GANTI TOOLTIP JADI BAHASA INDONESIA
                 tooltip=[
                     alt.Tooltip('AKREDITASI_CLEAN', title='Akreditasi'),
-                    alt.Tooltip('count()', title='Jumlah Sekolah') # <-- INI PERUBAHANNYA
+                    alt.Tooltip('count()', title='Jumlah Sekolah') 
                 ],
                 order=alt.Order("AKREDITASI_CLEAN", sort="ascending")
             ).properties(title="Proporsi Sekolah (Area Terpilih)")
             
             st.altair_chart(chart_akreditasi, use_container_width=True)
 
-            # Chart Top Kecamatan
             if 'KECAMATAN' in df_filtered.columns:
                 top_kec = df_filtered['KECAMATAN'].value_counts().head(10).reset_index()
                 top_kec.columns = ['Kecamatan', 'Jumlah']
                 
                 chart_kec = alt.Chart(top_kec).mark_bar().encode(
-                    x=alt.X('Jumlah', title='Jumlah Sekolah'), # <-- Title Indo
+                    x=alt.X('Jumlah', title='Jumlah Sekolah'), 
                     y=alt.Y('Kecamatan', sort='-x', title=''),
                     tooltip=['Kecamatan', alt.Tooltip('Jumlah', title='Jumlah Sekolah')]
                 ).properties(title="Top 10 Kecamatan")
@@ -256,11 +289,10 @@ def main():
     # --- TABEL DATA ---
     with st.expander("📂 Lihat Data Detail"):
         kolom_buang = ['Unnamed: 0', 'BENTUK PENDIDIKAN', 'WAKTU PENYELENGGARAAN', 
-                       'AKREDITASI_CLEAN', 'BENTUK', 'NAMA DUSUN'] # NAMA DUSUN SUDAH DIHAPUS DI LOAD_DATA TAPI UNTUK AMAN
+                       'AKREDITASI_CLEAN', 'BENTUK', 'NAMA DUSUN']
         
         df_tampil = df_filtered.drop(columns=kolom_buang, errors='ignore').copy()
         
-        # Reorder Columns
         cols = list(df_tampil.columns)
         if 'JENJANG' in cols and 'NPSN' in cols:
             cols.remove('JENJANG')
@@ -268,11 +300,9 @@ def main():
             cols.insert(idx_npsn + 1, 'JENJANG')
             df_tampil = df_tampil[cols]
 
-        # Fix Kode Pos
         if 'KODE POS' in df_tampil.columns:
             df_tampil['KODE POS'] = df_tampil['KODE POS'].astype(str).str.replace(r'\.0$', '', regex=True).replace({'nan': '-', 'NaN': '-'})
 
-        # Reset Index
         df_tampil = df_tampil.reset_index(drop=True)
         df_tampil.index = df_tampil.index + 1
         
